@@ -59,14 +59,14 @@ void onHydIndLeftChange(unsigned int v) {
   dirty1 = true;
   lastDcsMs = millis();
 }
-DcsBios::IntegerBuffer hydIndLeftBuffer(0x750e, 0xffff, 0, onHydIndLeftChange);
+DcsBios::IntegerBuffer hydIndLeftBuffer(0x751e, 0xffff, 0, onHydIndLeftChange);
 
 void onHydIndRightChange(unsigned int v) {
   raw2 = (uint16_t)v;
   dirty2 = true;
   lastDcsMs = millis();
 }
-DcsBios::IntegerBuffer hydIndRightBuffer(0x7510, 0xffff, 0, onHydIndRightChange);
+DcsBios::IntegerBuffer hydIndRightBuffer(0x7520, 0xffff, 0, onHydIndRightChange);
 
 // ── Setup ──────────────────────────────────────────────────────────────────────
 void setup() {
