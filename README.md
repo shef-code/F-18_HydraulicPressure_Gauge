@@ -26,3 +26,14 @@ Add Custom_Waveshare_ESP32S31_28LCD.h tp the User_Setups folder.
  
 </p>
 
+
+After testing one of the touch screen editions of this display it would seem the pins are mapped a bit differently.
+Give these a try if you need to:
+
+#define LCD_DC_PIN      (8)
+#define LCD_CS_PIN      (9)
+#define LCD_CLK_PIN     (10)
+#define LCD_MOSI_PIN    (11)
+#define LCD_MISO_PIN    (12)
+#define LCD_RST_PIN     (14)
+#define LCD_BL_PIN      (2)
