@@ -1,5 +1,5 @@
 #include <TFT_eSPI.h>
-// 'hydPressNeedle1', 27x90 Pivot point 13x77
+// 'hydPressNeedle1', 33,120 Pivot point 13x77
 // Image produced in .png format (I used paint.net but any suitable editor is fine - something suporting layers is useful)
 // Image then converted into code format using Icd-image-converter, again alternatives are fine
 // Image needs to be in R5G6B5 color format, at a block size of 16 bit and in Little-Endian Byte order
