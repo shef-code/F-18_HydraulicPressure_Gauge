@@ -1,6 +1,4 @@
-// Desktop preview: renders BOTH gauge styles to PNG with the needles in place.
-//   - procedural: line-for-line port of GaugeStyleProcedural.h
-//   - bitmap:     reads the generated assets_bitmap/*.h headers
+// Desktop preview: renders the gauge (port of GaugeStyleProcedural.h) to PNG with the needles in place.
 // Usage: node tools/preview_gauges.js   (writes docs/preview/*.png)
 const fs = require('fs'), path = require('path'), zlib = require('zlib');
 const ROOT = path.join(__dirname, '..'), OUT = path.join(ROOT, 'docs', 'preview');
@@ -182,24 +180,10 @@ function compose(face, n1, n2, psi1, psi2) {
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
-const results = {};
-for (const [tag, P, bmpTag] of [['Day', PAL_DAY, 'Day'], ['Green', PAL_NVG, 'Green']]) {
+for (const [tag, P] of [['Day', PAL_DAY], ['Green', PAL_NVG]]) {
   const face = new Sprite(240, 240), n1 = new Sprite(33, 120), n2 = new Sprite(33, 120);
   buildFace(face, P); buildNeedle(n1, 1, P); buildNeedle(n2, 2, P);
-  const bface = spriteFrom(loadHeader(`face${bmpTag}.h`), 240, 240);
-  const bn1 = spriteFrom(loadHeader(`needle1${bmpTag}.h`), 33, 120), bn2 = spriteFrom(loadHeader(`needle2${bmpTag}.h`), 33, 120);
-  const pFaceOnly = face;
   writePNG(path.join(OUT, `proc_face${tag}.png`), 240, 240, face.toRGB());
-  const pa = compose(face, n1, n2, 4.2, 0.5), ba = compose(bface, bn1, bn2, 4.2, 0.5);
-  writePNG(path.join(OUT, `proc_gauge${tag}.png`), 240, 240, pa.toRGB());
-  writePNG(path.join(OUT, `bitmap_gauge${tag}.png`), 240, 240, ba.toRGB());
-  results[tag] = { pa, ba };
+  writePNG(path.join(OUT, `proc_gauge${tag}.png`), 240, 240, compose(face, n1, n2, 4.2, 0.5).toRGB());
 }
-// side-by-side comparison sheet: [procedural day | bitmap day | procedural nvg | bitmap nvg], shown 2x
-const order = [results.Day.pa, results.Day.ba, results.Green.pa, results.Green.ba], Z = 2, GAP = 8;
-const W = order.length * 240 * Z + (order.length - 1) * GAP, H = 240 * Z;
-const sheet = Buffer.alloc(W * H * 3, 24);
-order.forEach((spr, k) => { const rgb = spr.toRGB(), x0 = k * (240 * Z + GAP);
-  for (let y = 0; y < H; y++) for (let x = 0; x < 240 * Z; x++) { const si = ((y / Z | 0) * 240 + (x / Z | 0)) * 3, di = (y * W + x0 + x) * 3; sheet[di] = rgb[si]; sheet[di + 1] = rgb[si + 1]; sheet[di + 2] = rgb[si + 2]; } });
-writePNG(path.join(OUT, 'compare.png'), W, H, sheet);
 console.log('wrote previews to', OUT);

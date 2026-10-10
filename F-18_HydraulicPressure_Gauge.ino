@@ -12,24 +12,13 @@
 
 #define TFT_BL 40
 
-// ── Gauge look ─────────────────────────────────────
-// 1 = procedural (face + needles computed at boot, tiny flash footprint)
-// 2 = bitmap     (pre-rendered photo-real assets in assets_bitmap/)
-#define GAUGE_STYLE 1
-
-#if GAUGE_STYLE == 1
-  #include "GaugeStyleProcedural.h"
-#elif GAUGE_STYLE == 2
-  #include "GaugeStyleBitmap.h"
-#else
-  #error "GAUGE_STYLE must be 1 (procedural) or 2 (bitmap)"
-#endif
+#include "GaugeStyleProcedural.h"
 
 // ── Display constants ─────────────────────────────
 const byte colorDepth = 16;
 static const uint16_t W = 240, H = 240;
 
-static volatile uint16_t instPnlDimmer = 65535;
+static uint16_t instPnlDimmer = 65535;
 
 // ── TFT & Sprites ─────────────────────────────────
 TFT_eSPI tft = TFT_eSPI();
@@ -49,7 +38,7 @@ void setBrightness(uint8_t value)
 }
 
 // ── DCS driven state ──────────────────────────────
-static volatile uint8_t cockpitLightMode = 0;   // 0 DAY, 1 NITE, 2 NVG
+static uint8_t cockpitLightMode = 0;   // 0 DAY, 1 NITE, 2 NVG
 
 // INST PNL knob sets the backlight in every mode (never fully dark); NVG is capped.
 void applyBrightness()
@@ -59,22 +48,20 @@ void applyBrightness()
   setBrightness(brt);
 }
 
-static volatile uint16_t raw1 = 0;
-static volatile uint16_t raw2 = 0;
+static uint16_t raw1 = 0;
+static uint16_t raw2 = 0;
 
-static volatile bool dirty1 = true;
-static volatile bool dirty2 = true;
+static bool dirty1 = true;
+static bool dirty2 = true;
 
-static volatile bool useGreenBg = false;
-static volatile bool dirtyBg = true;
+static bool useGreenBg = false;
+static bool dirtyBg = true;
 
-static volatile uint32_t lastDcsMs = 0;
 
 // ── Render scheduler ──────────────────────────────
 static uint32_t lastFrameMs = 0;
 
 static const uint32_t FRAME_INTERVAL_MS = 33;
-static const uint32_t WATCHDOG_MS = 500;
 
 // ── Mapping ───────────────────────────────────────
 static inline int16_t map_hyd(uint16_t v)
@@ -92,7 +79,6 @@ void onHydIndLeftChange(unsigned int v)
 {
   raw1 = v;
   dirty1 = true;
-  lastDcsMs = millis();
 }
 DcsBios::IntegerBuffer hydIndLeftBuffer(0x751e, 0xffff, 0, onHydIndLeftChange);
 
@@ -100,11 +86,10 @@ void onHydIndRightChange(unsigned int v)
 {
   raw2 = v;
   dirty2 = true;
-  lastDcsMs = millis();
 }
 DcsBios::IntegerBuffer hydIndRightBuffer(0x7520, 0xffff, 0, onHydIndRightChange);
 
-void onCockkpitLightModeSwChange(unsigned int newValue)
+void onCockpitLightModeSwChange(unsigned int newValue)
 {
   cockpitLightMode = newValue;
 
@@ -115,16 +100,14 @@ void onCockkpitLightModeSwChange(unsigned int newValue)
 
   applyBrightness();
 
-  lastDcsMs = millis();
 }
-DcsBios::IntegerBuffer cockkpitLightModeSwBuffer(0x74c8, 0x0600, 9, onCockkpitLightModeSwChange);
+DcsBios::IntegerBuffer cockpitLightModeSwBuffer(0x74c8, 0x0600, 9, onCockpitLightModeSwChange);
 
 // brightness from cockpit dimmer
 void onInstPnlDimmerChange(unsigned int newValue)
 {
   instPnlDimmer = newValue;
   applyBrightness();
-  lastDcsMs = millis();
 }
 DcsBios::IntegerBuffer instPnlDimmerBuffer(0x7546, 0xffff, 0, onInstPnlDimmerChange);
 
@@ -184,14 +167,8 @@ void loop()
 
   bool frameDue = (now - lastFrameMs) >= FRAME_INTERVAL_MS;
 
-  bool dcsActive = (now - lastDcsMs) < 2000;
-
-  bool watchdog = dcsActive && ((now - lastFrameMs) >= WATCHDOG_MS);
-
-  if ((anyDirty && frameDue) || watchdog)
+  if (anyDirty && frameDue)
   {
-    noInterrupts();
-
     uint16_t r1 = raw1;
     uint16_t r2 = raw2;
     bool green = useGreenBg;
@@ -200,9 +177,6 @@ void loop()
     dirty1 = false;
     dirty2 = false;
     dirtyBg = false;
-
-    interrupts();
-
     if (themeChanged) applyTheme(green);
 
     renderGauge(map_hyd(r1), map_hyd(r2));
@@ -256,7 +230,7 @@ void bitTest()
     delay(8);
   }
 
-  setBrightness(255);
+  applyBrightness();
 
   // Needle 1 sweep
   for (int i = 0; i <= 320; i += 5)
