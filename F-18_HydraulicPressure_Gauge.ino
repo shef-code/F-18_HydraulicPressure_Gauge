@@ -1,6 +1,9 @@
 #define USE_HSPI_PORT
 
 #include <Arduino.h>
+#if ARDUINO_USB_MODE == 0
+#include <USB.h>
+#endif
 #include <TFT_eSPI.h>
 
 #define DCSBIOS_DEFAULT_SERIAL
@@ -9,15 +12,18 @@
 
 #define TFT_BL 40
 
-// ── Assets ─────────────────────────────────────────
-#include "hydPressBackground.h"
-#include "hydPressureBackgroundGreen.h"
+// ── Gauge look ─────────────────────────────────────
+// 1 = procedural (face + needles computed at boot, tiny flash footprint)
+// 2 = bitmap     (pre-rendered photo-real assets in assets_bitmap/)
+#define GAUGE_STYLE 1
 
-#include "hydPressNeedle1.h"
-#include "hydPressNeedle2.h"
-
-#include "hydPressNeedle1Green.h"
-#include "hydPressNeedle2Green.h"
+#if GAUGE_STYLE == 1
+  #include "GaugeStyleProcedural.h"
+#elif GAUGE_STYLE == 2
+  #include "GaugeStyleBitmap.h"
+#else
+  #error "GAUGE_STYLE must be 1 (procedural) or 2 (bitmap)"
+#endif
 
 // ── Display constants ─────────────────────────────
 const byte colorDepth = 16;
@@ -31,6 +37,10 @@ TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite gaugeBack(&tft);
 TFT_eSprite needle1(&tft);
 TFT_eSprite needle2(&tft);
+TFT_eSprite needleShadow(&tft);   // silhouette of the needle, drawn offset for depth
+
+static const int16_t NEEDLE_W = 33, NEEDLE_H = 120, NEEDLE_PIVOT_X = 16, NEEDLE_PIVOT_Y = 103;
+static const int16_t SHADOW_DX = 3, SHADOW_DY = 4;
 
 // ── Backlight helper ──────────────────────────────
 void setBrightness(uint8_t value)
@@ -39,6 +49,16 @@ void setBrightness(uint8_t value)
 }
 
 // ── DCS driven state ──────────────────────────────
+static volatile uint8_t cockpitLightMode = 0;   // 0 DAY, 1 NITE, 2 NVG
+
+// INST PNL knob sets the backlight in every mode (never fully dark); NVG is capped.
+void applyBrightness()
+{
+  int brt = map(instPnlDimmer, 0, 65535, 20, 255);
+  if (cockpitLightMode == 2) brt = min(brt, 80);
+  setBrightness(brt);
+}
+
 static volatile uint16_t raw1 = 0;
 static volatile uint16_t raw2 = 0;
 
@@ -47,8 +67,6 @@ static volatile bool dirty2 = true;
 
 static volatile bool useGreenBg = false;
 static volatile bool dirtyBg = true;
-
-static volatile uint8_t cockpitLightMode = 0;
 
 static volatile uint32_t lastDcsMs = 0;
 
@@ -65,7 +83,8 @@ static inline int16_t map_hyd(uint16_t v)
 }
 
 // ── Forward declarations ──────────────────────────
-void renderGauge(int16_t a1, int16_t a2, bool greenBg);
+void applyTheme(bool green);
+void renderGauge(int16_t a1, int16_t a2);
 void bitTest();
 
 // ── DCS callbacks ─────────────────────────────────
@@ -94,20 +113,7 @@ void onCockkpitLightModeSwChange(unsigned int newValue)
   useGreenBg = green;
   dirtyBg = true;
 
-  // Update brightness immediately when mode changes
-  if (cockpitLightMode == 0)
-  {
-    setBrightness(255);  // DAY
-  }
-  else
-  {
-    int brt = map(instPnlDimmer, 0, 65535, 0, 255);
-
-    if (cockpitLightMode == 2)   // NVG
-      brt = min(brt, 80);
-
-    setBrightness(brt);
-  }
+  applyBrightness();
 
   lastDcsMs = millis();
 }
@@ -117,26 +123,22 @@ DcsBios::IntegerBuffer cockkpitLightModeSwBuffer(0x74c8, 0x0600, 9, onCockkpitLi
 void onInstPnlDimmerChange(unsigned int newValue)
 {
   instPnlDimmer = newValue;
-
-  if (cockpitLightMode == 0)
-  {
-    setBrightness(255);  // DAY ignores knob
-    return;
-  }
-
-  int brt = map(newValue, 0, 65535, 0, 255);
-
-  if (cockpitLightMode == 2)   // NVG
-    brt = min(brt, 80);
-
-  setBrightness(brt);
+  applyBrightness();
+  lastDcsMs = millis();
 }
 DcsBios::IntegerBuffer instPnlDimmerBuffer(0x7546, 0xffff, 0, onInstPnlDimmerChange);
 
 // ── Setup ─────────────────────────────────────────
 void setup()
 {
-  Serial.begin(115200);
+#if ARDUINO_USB_MODE == 0
+  // Name shown by DCS-TALK (needs Tools > USB Mode: USB-OTG (TinyUSB) and USB CDC On Boot: Enabled).
+  USB.productName("HYD_PRESS");
+  USB.manufacturerName("F18 Cockpit");
+  USB.begin();
+#endif
+  // DCS-BIOS opens Serial at 250000 baud (~25 KB/s); a frame redraw takes tens of ms, so buffer generously.
+  Serial.setRxBufferSize(4096);
 
   pinMode(TFT_BL, OUTPUT);
   setBrightness(255);
@@ -152,19 +154,21 @@ void setup()
   gaugeBack.setSwapBytes(true);
   gaugeBack.setPivot(W / 2, H / 2);
 
-  // Needle 1
-  needle1.setColorDepth(colorDepth);
-  needle1.createSprite(33, 120);
-  needle1.setSwapBytes(true);
-  needle1.setPivot(17, 103);
+  // Needles + shadow
+  TFT_eSprite* needles[3] = {&needle1, &needle2, &needleShadow};
+  for (TFT_eSprite* n : needles)
+  {
+    n->setColorDepth(colorDepth);
+    if (!n->createSprite(NEEDLE_W, NEEDLE_H)) Serial.println(F("needle sprite alloc failed"));
+    n->setSwapBytes(true);
+    n->setPivot(NEEDLE_PIVOT_X, NEEDLE_PIVOT_Y);
+  }
 
-  // Needle 2
-  needle2.setColorDepth(colorDepth);
-  needle2.createSprite(33, 120);
-  needle2.setSwapBytes(true);
-  needle2.setPivot(17, 103);
+  styleInit(&tft);
+  dirtyBg = false;
+  applyTheme(useGreenBg);
 
-  renderGauge(map_hyd(raw1), map_hyd(raw2), useGreenBg);
+  renderGauge(map_hyd(raw1), map_hyd(raw2));
 
   bitTest();
 }
@@ -191,6 +195,7 @@ void loop()
     uint16_t r1 = raw1;
     uint16_t r2 = raw2;
     bool green = useGreenBg;
+    bool themeChanged = dirtyBg;
 
     dirty1 = false;
     dirty2 = false;
@@ -198,31 +203,36 @@ void loop()
 
     interrupts();
 
-    renderGauge(map_hyd(r1), map_hyd(r2), green);
+    if (themeChanged) applyTheme(green);
+
+    renderGauge(map_hyd(r1), map_hyd(r2));
 
     lastFrameMs = now;
   }
 }
 
 // ── Rendering ─────────────────────────────────────
-void renderGauge(int16_t angle1, int16_t angle2, bool greenBg)
+// Rebuild the needle sprites (and, for the procedural style, the dial face) for a theme.
+// Only needed when the cockpit light mode changes, not every frame.
+void applyTheme(bool green)
 {
-  gaugeBack.fillSprite(TFT_BLACK);
+  styleBuildTheme(needle1, needle2, green);
 
-  if (greenBg)
-  {
-    gaugeBack.pushImage(0, 0, W, H, hydPressureBackgroundGreen);
+  // Needle silhouette for the drop shadow
+  for (int y = 0; y < NEEDLE_H; y++)
+    for (int x = 0; x < NEEDLE_W; x++)
+      needleShadow.drawPixel(x, y, needle1.readPixel(x, y) == TFT_TRANSPARENT ? TFT_TRANSPARENT : TFT_BLACK);
+}
 
-    needle1.pushImage(0, 0, 33, 120, hydPressNeedle1Green);
-    needle2.pushImage(0, 0, 33, 120, hydPressNeedle2Green);
-  }
-  else
-  {
-    gaugeBack.pushImage(0, 0, W, H, hydPressBackground);
+void renderGauge(int16_t angle1, int16_t angle2)
+{
+  styleDrawFace(gaugeBack);
 
-    needle1.pushImage(0, 0, 33, 120, hydPressNeedle1);
-    needle2.pushImage(0, 0, 33, 120, hydPressNeedle2);
-  }
+  // Shadows first, offset by moving the destination pivot
+  gaugeBack.setPivot(W / 2 + SHADOW_DX, H / 2 + SHADOW_DY);
+  needleShadow.pushRotated(&gaugeBack, angle1, TFT_TRANSPARENT);
+  needleShadow.pushRotated(&gaugeBack, angle2, TFT_TRANSPARENT);
+  gaugeBack.setPivot(W / 2, H / 2);
 
   needle1.pushRotated(&gaugeBack, angle1, TFT_TRANSPARENT);
   needle2.pushRotated(&gaugeBack, angle2, TFT_TRANSPARENT);
@@ -248,31 +258,29 @@ void bitTest()
 
   setBrightness(255);
 
-  bool green = true;
-
   // Needle 1 sweep
   for (int i = 0; i <= 320; i += 5)
   {
-    renderGauge(map(i, 0, 320, -280, 40), 80, green);
+    renderGauge(map(i, 0, 320, -280, 40), 80);
     delay(5);
   }
 
   for (int i = 320; i >= 0; i -= 5)
   {
-    renderGauge(map(i, 0, 320, -280, 40), 80, green);
+    renderGauge(map(i, 0, 320, -280, 40), 80);
     delay(5);
   }
 
   // Needle 2 sweep
   for (int i = 0; i <= 320; i += 5)
   {
-    renderGauge(80, map(i, 0, 320, -280, 40), green);
+    renderGauge(80, map(i, 0, 320, -280, 40));
     delay(5);
   }
 
   for (int i = 320; i >= 0; i -= 5)
   {
-    renderGauge(80, map(i, 0, 320, -280, 40), green);
+    renderGauge(80, map(i, 0, 320, -280, 40));
     delay(5);
   }
 }
